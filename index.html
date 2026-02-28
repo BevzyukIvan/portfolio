@@ -383,5 +383,560 @@
 </main>
 
 <script src="script.js"></script>
+<script>
+    (() => {
+        // Захист від подвійної ініціалізації (якщо скрипт вставили двічі)
+        if (window.__LTGCHAT_WIDGET_INIT__) return;
+        window.__LTGCHAT_WIDGET_INIT__ = true;
+
+        const CFG = {
+            API_BASE: "https://franco-polycarpellary-electrostatically.ngrok-free.dev",
+            TITLE: "Чат",
+            BUTTON_LABEL: "Чат",
+            POSITION: "right", // "left" | "right"
+            WS_RECONNECT_MIN_MS: 1500,
+            WS_RECONNECT_MAX_MS: 10000,
+            SEND_TIMEOUT_MS: 15000
+        };
+
+        const WIDGET_KEY = "ltgchat_cid";
+        const OPEN_KEY = "ltgchat_open";
+        const NAME_KEY = "ltgchat_name";
+
+        function getCid() {
+            let cid = localStorage.getItem(WIDGET_KEY);
+            if (cid) return cid;
+            cid = (window.crypto && crypto.randomUUID)
+                ? crypto.randomUUID()
+                : ("cid_" + Math.random().toString(16).slice(2) + Date.now());
+            localStorage.setItem(WIDGET_KEY, cid);
+            return cid;
+        }
+
+        function normalizeClientName(raw) {
+            if (typeof raw !== "string") return "";
+            let s = raw
+                .replace(/\r/g, " ")
+                .replace(/\n/g, " ")
+                .replace(/\s+/g, " ")
+                .trim();
+
+            if (s.length < 2) return "";
+            if (s.length > 40) s = s.slice(0, 40);
+            return s;
+        }
+
+        function getClientName() {
+            return normalizeClientName(localStorage.getItem(NAME_KEY) || "");
+        }
+
+        function setClientName(name) {
+            const normalized = normalizeClientName(name);
+            if (!normalized) return false;
+            localStorage.setItem(NAME_KEY, normalized);
+            return true;
+        }
+
+        // Опційно (на майбутнє): якщо захочеш дати можливість змінити ім'я
+        // function clearClientName() {
+        //     localStorage.removeItem(NAME_KEY);
+        // }
+
+        function toWsBase(apiBase) {
+            try {
+                const u = new URL(apiBase);
+                u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+                return u.origin;
+            } catch {
+                return "";
+            }
+        }
+
+        function el(tag, attrs, children) {
+            const n = document.createElement(tag);
+            if (attrs) {
+                for (const [k, v] of Object.entries(attrs)) {
+                    if (v == null) continue;
+                    if (k === "class") n.className = v;
+                    else if (k === "style") n.setAttribute("style", v);
+                    else if (k.startsWith("on") && typeof v === "function") n.addEventListener(k.slice(2), v);
+                    else n.setAttribute(k, String(v));
+                }
+            }
+            if (children) {
+                for (const c of children) {
+                    n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+                }
+            }
+            return n;
+        }
+
+        function injectCss() {
+            if (document.querySelector('style[data-ltgchat="1"]')) return;
+
+            const side = CFG.POSITION === "left" ? "left" : "right";
+            const css = `
+      .ltgchat-btn{
+        position:fixed; bottom:18px; ${side}:18px;
+        z-index:2147483647;
+        display:inline-flex; align-items:center; gap:8px;
+        padding:12px 14px;
+        border-radius:999px;
+        border:1px solid rgba(0,0,0,.08);
+        background:#fff;
+        color:#111827;
+        font:600 14px/1 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+        cursor:pointer;
+        box-shadow:0 12px 30px rgba(0,0,0,.14);
+      }
+      .ltgchat-btn:hover{ box-shadow:0 14px 34px rgba(0,0,0,.17); }
+      .ltgchat-dot{
+        width:8px; height:8px; border-radius:999px; background:#22c55e;
+      }
+
+      .ltgchat-panel{
+        position:fixed; bottom:76px; ${side}:18px;
+        width:min(360px, calc(100vw - 24px));
+        height:min(520px, calc(100vh - 96px));
+        z-index:2147483647;
+        display:none;
+        flex-direction:column;
+        overflow:hidden;
+        border-radius:18px;
+        border:1px solid rgba(0,0,0,.08);
+        background:#fff;
+        color:#111827;
+        box-shadow:0 18px 50px rgba(0,0,0,.18);
+        font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      }
+      .ltgchat-panel.is-open{ display:flex; }
+
+      .ltgchat-head{
+        display:flex; align-items:center; justify-content:space-between;
+        padding:12px;
+        border-bottom:1px solid rgba(17,24,39,.08);
+        background:#fff;
+      }
+      .ltgchat-title{
+        font-weight:700;
+        font-size:14px;
+        line-height:1.2;
+      }
+      .ltgchat-status{
+        font-size:12px;
+        color:#6b7280;
+        margin-top:2px;
+      }
+      .ltgchat-close{
+        border:1px solid rgba(0,0,0,.08);
+        background:#fff;
+        color:#111827;
+        border-radius:10px;
+        min-width:34px;
+        height:34px;
+        cursor:pointer;
+        font-weight:700;
+      }
+
+      .ltgchat-body{
+        flex:1;
+        overflow:auto;
+        padding:12px;
+        display:flex;
+        flex-direction:column;
+        gap:8px;
+        background:#fff;
+      }
+
+      .ltgchat-msg{
+        max-width:84%;
+        padding:10px 12px;
+        border-radius:14px;
+        font-size:14px;
+        line-height:1.35;
+        white-space:pre-wrap;
+        word-break:break-word;
+        border:1px solid rgba(17,24,39,.08);
+        background:#f9fafb;
+        color:#111827;
+      }
+      .ltgchat-msg.me{
+        margin-left:auto;
+        background:#111827;
+        color:#fff;
+        border-color:#111827;
+      }
+      .ltgchat-msg.agent{
+        margin-right:auto;
+      }
+      .ltgchat-msg.sys{
+        margin:0 auto;
+        max-width:100%;
+        font-size:12px;
+        color:#6b7280;
+        background:transparent;
+        border:none;
+        padding:2px 4px;
+        text-align:center;
+      }
+
+      .ltgchat-foot{
+        padding:10px;
+        border-top:1px solid rgba(17,24,39,.08);
+        display:flex;
+        gap:8px;
+        background:#fff;
+      }
+      .ltgchat-input{
+        flex:1;
+        height:42px;
+        border-radius:12px;
+        border:1px solid rgba(17,24,39,.12);
+        background:#fff;
+        color:#111827;
+        padding:0 12px;
+        outline:none;
+        font-size:14px;
+      }
+      .ltgchat-input::placeholder{ color:#9ca3af; }
+      .ltgchat-input:focus{
+        border-color:#9ca3af;
+        box-shadow:0 0 0 3px rgba(17,24,39,.06);
+      }
+
+      .ltgchat-send{
+        height:42px;
+        min-width:42px;
+        border-radius:12px;
+        border:1px solid #111827;
+        background:#111827;
+        color:#fff;
+        cursor:pointer;
+        font-weight:700;
+        padding:0 12px;
+      }
+      .ltgchat-send:disabled{
+        opacity:.6;
+        cursor:not-allowed;
+      }
+    `;
+            const style = document.createElement("style");
+            style.setAttribute("data-ltgchat", "1");
+            style.appendChild(document.createTextNode(css));
+            document.head.appendChild(style);
+        }
+
+        function appendMsg(container, who, text) {
+            if (typeof text !== "string") return;
+            const normalized = text.replace(/\r\n/g, "\n").trim();
+            if (!normalized) return; // захист від пустих keepalive/порожніх рядків
+
+            const cls =
+                who === "me" ? "me" :
+                    who === "sys" ? "sys" : "agent";
+
+            const msg = el("div", { class: "ltgchat-msg " + cls }, [normalized]);
+            container.appendChild(msg);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function setStatus(statusEl, text) {
+            if (!statusEl) return;
+            statusEl.textContent = text || "";
+        }
+
+        async function sendMessage(apiBase, cid, text, clientName) {
+            const payload = {
+                cid,
+                clientName: clientName || null, // <-- важливо для назви теми на бекенді
+                text,
+                pageUrl: location.href,
+                referrer: document.referrer || null,
+                ts: Date.now()
+            };
+
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), CFG.SEND_TIMEOUT_MS);
+
+            try {
+                const r = await fetch(apiBase.replace(/\/$/, "") + "/api/chat/send", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                    mode: "cors",
+                    credentials: "omit",
+                    keepalive: true,
+                    signal: controller.signal
+                });
+
+                if (!r.ok) {
+                    const t = await r.text().catch(() => "");
+                    throw new Error("Send failed: " + r.status + " " + t);
+                }
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        function createWsManager({ wsBase, cid, onAgentMessage, onStatus }) {
+            let ws = null;
+            let reconnectTimer = null;
+            let reconnectDelay = CFG.WS_RECONNECT_MIN_MS;
+            let manuallyStopped = false;
+
+            function clearReconnectTimer() {
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+            }
+
+            function scheduleReconnect() {
+                if (manuallyStopped) return;
+                clearReconnectTimer();
+                onStatus("Підключення...");
+                reconnectTimer = setTimeout(() => {
+                    connect();
+                }, reconnectDelay);
+                reconnectDelay = Math.min(reconnectDelay * 2, CFG.WS_RECONNECT_MAX_MS);
+            }
+
+            function connect() {
+                if (manuallyStopped) return;
+                if (!wsBase) return;
+
+                // Якщо вже є активне або в процесі - не створюємо дубль
+                if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+                    return;
+                }
+
+                try {
+                    ws = new WebSocket(wsBase + "/ws/chat?cid=" + encodeURIComponent(cid));
+                } catch {
+                    scheduleReconnect();
+                    return;
+                }
+
+                ws.addEventListener("open", () => {
+                    reconnectDelay = CFG.WS_RECONNECT_MIN_MS;
+                    onStatus("Онлайн");
+                });
+
+                ws.addEventListener("message", (e) => {
+                    if (typeof e.data !== "string") return;
+
+                    let data;
+                    try {
+                        data = JSON.parse(e.data);
+                    } catch {
+                        return;
+                    }
+
+                    // Ігноруємо keepalive
+                    const type = typeof data?.type === "string" ? data.type.toUpperCase() : "";
+                    if (type === "KEEPALIVE" || type === "PING" || type === "HEARTBEAT") {
+                        return;
+                    }
+
+                    // Беремо тільки непорожній текст
+                    if (typeof data?.text === "string" && data.text.trim() !== "") {
+                        onAgentMessage(data.text);
+                    }
+                });
+
+                ws.addEventListener("close", () => {
+                    onStatus("Офлайн");
+                    ws = null;
+                    scheduleReconnect();
+                });
+
+                ws.addEventListener("error", () => {
+                    // Зазвичай після error прийде close; не дублюємо логіку тут
+                });
+            }
+
+            function stop() {
+                manuallyStopped = true;
+                clearReconnectTimer();
+                if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+                    try { ws.close(); } catch {}
+                }
+                ws = null;
+                onStatus("Офлайн");
+            }
+
+            return { connect, stop };
+        }
+
+        function init() {
+            if (!CFG.API_BASE || CFG.API_BASE.includes("YOUR_API_DOMAIN")) return;
+
+            injectCss();
+
+            const cid = getCid();
+            const wsBase = toWsBase(CFG.API_BASE);
+
+            const body = el("div", { class: "ltgchat-body" });
+
+            const input = el("input", {
+                class: "ltgchat-input",
+                placeholder: "Ваше повідомлення...",
+                maxlength: "2000",
+                autocomplete: "off"
+            });
+
+            const sendBtn = el("button", { class: "ltgchat-send", type: "button", "aria-label": "Надіслати" }, ["→"]);
+            const statusEl = el("div", { class: "ltgchat-status" }, ["Підключення..."]);
+            const closeBtn = el("button", { class: "ltgchat-close", type: "button", "aria-label": "Закрити чат" }, ["✕"]);
+            const titleEl = el("div", { class: "ltgchat-title" }, [CFG.TITLE]);
+
+            const panel = el("div", { class: "ltgchat-panel", role: "dialog", "aria-label": "Чат" }, [
+                el("div", { class: "ltgchat-head" }, [
+                    el("div", null, [
+                        titleEl,
+                        statusEl
+                    ]),
+                    closeBtn
+                ]),
+                body,
+                el("div", { class: "ltgchat-foot" }, [input, sendBtn])
+            ]);
+
+            const btn = el("button", { class: "ltgchat-btn", type: "button", "aria-label": "Відкрити чат" }, [
+                el("span", { class: "ltgchat-dot", "aria-hidden": "true" }),
+                CFG.BUTTON_LABEL
+            ]);
+
+            document.body.appendChild(btn);
+            document.body.appendChild(panel);
+
+            let sending = false;
+
+            function refreshNameStageUi() {
+                const clientName = getClientName();
+
+                if (!clientName) {
+                    titleEl.textContent = CFG.TITLE;
+                    input.placeholder = "Як ми можемо до вас звертатись?";
+                    return;
+                }
+
+                titleEl.textContent = `${CFG.TITLE} • ${clientName}`;
+                input.placeholder = "Ваше повідомлення...";
+            }
+
+            function open() {
+                panel.classList.add("is-open");
+                localStorage.setItem(OPEN_KEY, "1");
+                input.focus();
+            }
+
+            function close() {
+                panel.classList.remove("is-open");
+                localStorage.removeItem(OPEN_KEY);
+            }
+
+            function toggle() {
+                panel.classList.contains("is-open") ? close() : open();
+            }
+
+            btn.addEventListener("click", toggle);
+            closeBtn.addEventListener("click", close);
+
+            async function doSend() {
+                if (sending) return;
+
+                const raw = input.value || "";
+                const text = raw.trim();
+                if (!text) return;
+
+                // КРОК 1: якщо ім'я ще не задане — перший ввід = ім'я
+                if (!getClientName()) {
+                    const name = normalizeClientName(text);
+
+                    if (!name) {
+                        appendMsg(body, "sys", "Введіть, будь ласка, ім’я 2–40 символів. Це перше повідомлення збережеться як назва чату.");
+                        return;
+                    }
+
+                    setClientName(name);
+
+                    input.value = "";
+                    appendMsg(body, "sys", `Дякуємо, ${name}! Тепер напишіть, будь ласка, ваше питання.`);
+
+                    refreshNameStageUi();
+                    input.focus();
+                    return;
+                }
+
+                // КРОК 2: звичайне повідомлення
+                const clientName = getClientName();
+
+                input.value = "";
+                appendMsg(body, "me", text);
+
+                sending = true;
+                sendBtn.disabled = true;
+                input.disabled = true;
+
+                try {
+                    await sendMessage(CFG.API_BASE, cid, text, clientName);
+                } catch {
+                    appendMsg(body, "sys", "Не вдалося надіслати повідомлення. Спробуйте ще раз.");
+                } finally {
+                    sending = false;
+                    sendBtn.disabled = false;
+                    input.disabled = false;
+                    input.focus();
+                }
+            }
+
+            sendBtn.addEventListener("click", doSend);
+            input.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    doSend();
+                }
+            });
+
+            const wsManager = createWsManager({
+                wsBase,
+                cid,
+                onAgentMessage: (text) => appendMsg(body, "agent", text),
+                onStatus: (s) => setStatus(statusEl, s)
+            });
+
+            // Підготуємо UI перед відкриттям
+            refreshNameStageUi();
+
+            // Стартове повідомлення (лише в межах поточного завантаження сторінки)
+            if (!getClientName()) {
+                appendMsg(
+                    body,
+                    "sys",
+                    "Доброго дня! Щоб почати, напишіть, будь ласка, як до вас звертатись. Перше повідомлення буде збережене як ваше ім’я (назва цього чату)."
+                );
+            } else {
+                appendMsg(body, "sys", "Напишіть, будь ласка, ваше питання.");
+            }
+
+            wsManager.connect();
+
+            // Відновити стан відкритого віджета (опційно)
+            if (localStorage.getItem(OPEN_KEY) === "1") {
+                open();
+            }
+
+            // Акуратне закриття при виході зі сторінки
+            window.addEventListener("pagehide", () => wsManager.stop(), { once: true });
+        }
+
+        if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", init, { once: true });
+        } else {
+            init();
+        }
+    })();
+</script>
 </body>
 </html>
