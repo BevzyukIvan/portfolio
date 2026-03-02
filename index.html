@@ -490,9 +490,7 @@
   touch-action: manipulation;
 }
 .ltgchat-btn:hover{ box-shadow:0 14px 34px rgba(0,0,0,.17); }
-.ltgchat-dot{
-  width:8px; height:8px; border-radius:999px; background:#22c55e;
-}
+.ltgchat-dot{ width:8px; height:8px; border-radius:999px; background:#22c55e; }
 
 /* ---------- PANEL ---------- */
 .ltgchat-panel{
@@ -600,7 +598,7 @@
   outline:none;
 
   /* КЛЮЧОВЕ: 16px, щоб iOS НЕ робив zoom */
-  font-size:16px;
+  font-size:16px !important;
 }
 .ltgchat-input::placeholder{ color:#9ca3af; }
 .ltgchat-input:focus{
@@ -649,13 +647,15 @@
   .ltgchat-panel:not(.ltgchat-kb) .ltgchat-foot{
     padding-bottom: calc(10px + env(safe-area-inset-bottom)) !important;
   }
+
+  /* коли клавіатура відкрита — прибираємо нижній відступ (щоб не створювати зайвий “проліт”) */
   .ltgchat-panel.ltgchat-kb .ltgchat-foot{
-    padding-bottom: 10px !important;
+    padding-bottom: 0 !important;
   }
 
   .ltgchat-btn{ bottom:12px; }
 }
-      `;
+    `;
 
             const style = document.createElement("style");
             style.setAttribute("data-ltgchat", "1");
@@ -668,10 +668,7 @@
             const normalized = text.replace(/\r\n/g, "\n").trim();
             if (!normalized) return;
 
-            const cls =
-                who === "me" ? "me" :
-                    who === "sys" ? "sys" : "agent";
-
+            const cls = (who === "me") ? "me" : (who === "sys") ? "sys" : "agent";
             const msg = el("div", { class: "ltgchat-msg " + cls }, [normalized]);
             container.appendChild(msg);
             container.scrollTop = container.scrollHeight;
@@ -811,6 +808,33 @@
             update();
         }
 
+        // Хак: під час фокуса в інпуті блокуємо авто-zoom через meta viewport (iOS)
+        function lockViewportZoomWhileFocused(inputEl) {
+            let meta = document.querySelector('meta[name="viewport"]');
+            if (!meta) {
+                meta = document.createElement("meta");
+                meta.name = "viewport";
+                document.head.appendChild(meta);
+            }
+
+            const original = meta.getAttribute("content")
+                || "width=device-width,initial-scale=1,viewport-fit=cover";
+
+            const onFocus = () => {
+                const cleaned = original
+                    .replace(/,\s*maximum-scale\s*=\s*[^,]+/gi, "")
+                    .replace(/,\s*user-scalable\s*=\s*[^,]+/gi, "");
+                meta.setAttribute("content", cleaned + ", maximum-scale=1");
+            };
+
+            const onBlur = () => {
+                meta.setAttribute("content", original);
+            };
+
+            inputEl.addEventListener("focus", onFocus);
+            inputEl.addEventListener("blur", onBlur);
+        }
+
         // iOS: надійний lock scroll під overlay
         let __ltg_prev_scroll_y = 0;
         function lockScroll() {
@@ -850,7 +874,8 @@
                 class: "ltgchat-input",
                 placeholder: "Ваше повідомлення...",
                 maxlength: "2000",
-                autocomplete: "off"
+                autocomplete: "off",
+                inputmode: "text"
             });
 
             const sendBtn = el("button", { class: "ltgchat-send", type: "button", "aria-label": "Надіслати" }, ["→"]);
@@ -877,6 +902,13 @@
 
             // важливо: після вставки в DOM
             bindMobileViewport(panel);
+
+            // фокус/блюр як додатковий “якорь” для ltgchat-kb (щоб не було зайвого паддінгу)
+            input.addEventListener("focus", () => panel.classList.add("ltgchat-kb"));
+            input.addEventListener("blur", () => setTimeout(() => panel.classList.remove("ltgchat-kb"), 50));
+
+            // анти-zoom для iOS (Chrome/Google/вебв’ю)
+            lockViewportZoomWhileFocused(input);
 
             let sending = false;
 
