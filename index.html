@@ -712,11 +712,17 @@
             }
         }
 
+        // ✅ ОНОВЛЕНО: WS піднімається тільки коли чат "відкритий"
         function createWsManager({ wsBase, cid, onAgentMessage, onStatus }) {
             let ws = null;
             let reconnectTimer = null;
             let reconnectDelay = CFG.WS_RECONNECT_MIN_MS;
-            let manuallyStopped = false;
+
+            // enabled=true тільки коли чат відкритий
+            let enabled = false;
+
+            // stop() для pagehide (повністю зупиняє)
+            let permanentlyStopped = false;
 
             function clearReconnectTimer() {
                 if (reconnectTimer) {
@@ -726,15 +732,15 @@
             }
 
             function scheduleReconnect() {
-                if (manuallyStopped) return;
+                if (permanentlyStopped || !enabled) return;
                 clearReconnectTimer();
                 onStatus("Підключення...");
-                reconnectTimer = setTimeout(() => connect(), reconnectDelay);
+                reconnectTimer = setTimeout(() => connectInternal(), reconnectDelay);
                 reconnectDelay = Math.min(reconnectDelay * 2, CFG.WS_RECONNECT_MAX_MS);
             }
 
-            function connect() {
-                if (manuallyStopped) return;
+            function connectInternal() {
+                if (permanentlyStopped || !enabled) return;
                 if (!wsBase) return;
 
                 if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
@@ -766,9 +772,13 @@
                 });
 
                 ws.addEventListener("close", () => {
-                    onStatus("Офлайн");
                     ws = null;
-                    scheduleReconnect();
+                    if (!permanentlyStopped && enabled) {
+                        onStatus("Офлайн");
+                        scheduleReconnect();
+                    } else {
+                        onStatus("Офлайн");
+                    }
                 });
 
                 ws.addEventListener("error", () => {
@@ -776,8 +786,17 @@
                 });
             }
 
-            function stop() {
-                manuallyStopped = true;
+            // викликається при відкритті чату
+            function connect() {
+                if (permanentlyStopped) return;
+                enabled = true;
+                onStatus("Підключення...");
+                connectInternal();
+            }
+
+            // викликається при закритті чату (можна потім знову connect)
+            function disconnect() {
+                enabled = false;
                 clearReconnectTimer();
                 if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
                     try { ws.close(); } catch {}
@@ -786,7 +805,13 @@
                 onStatus("Офлайн");
             }
 
-            return { connect, stop };
+            // викликається при виході зі сторінки (pagehide) — без відновлення
+            function stop() {
+                permanentlyStopped = true;
+                disconnect();
+            }
+
+            return { connect, disconnect, stop };
         }
 
         // iOS/Android: використовуємо visualViewport для висоти/offset, і ставимо клас "клавіатура відкрита"
@@ -879,7 +904,7 @@
             });
 
             const sendBtn = el("button", { class: "ltgchat-send", type: "button", "aria-label": "Надіслати" }, ["→"]);
-            const statusEl = el("div", { class: "ltgchat-status" }, ["Підключення..."]);
+            const statusEl = el("div", { class: "ltgchat-status" }, ["Офлайн"]);
             const closeBtn = el("button", { class: "ltgchat-close", type: "button", "aria-label": "Закрити чат" }, ["✕"]);
             const titleEl = el("div", { class: "ltgchat-title" }, [CFG.TITLE]);
 
@@ -925,10 +950,21 @@
                 input.placeholder = "Ваше повідомлення...";
             }
 
+            const wsManager = createWsManager({
+                wsBase,
+                cid,
+                onAgentMessage: (text) => appendMsg(body, "agent", text),
+                onStatus: (s) => setStatus(statusEl, s)
+            });
+
             function open() {
                 lockScroll();
                 panel.classList.add("is-open");
                 localStorage.setItem(OPEN_KEY, "1");
+
+                // ✅ WS підключаємо ТІЛЬКИ при відкритті чату
+                wsManager.connect();
+
                 setTimeout(() => {
                     input.focus({ preventScroll: true });
                     body.scrollTop = body.scrollHeight;
@@ -938,6 +974,10 @@
             function close() {
                 panel.classList.remove("is-open");
                 localStorage.removeItem(OPEN_KEY);
+
+                // ✅ WS відключаємо при закритті чату (можна потім знову підключити)
+                wsManager.disconnect();
+
                 unlockScroll();
             }
 
@@ -1002,13 +1042,6 @@
                 }
             });
 
-            const wsManager = createWsManager({
-                wsBase,
-                cid,
-                onAgentMessage: (text) => appendMsg(body, "agent", text),
-                onStatus: (s) => setStatus(statusEl, s)
-            });
-
             refreshNameStageUi();
 
             if (!getClientName()) {
@@ -1017,10 +1050,8 @@
                 appendMsg(body, "sys", "Напишіть, будь ласка, ваше питання.");
             }
 
-            wsManager.connect();
-
             if (localStorage.getItem(OPEN_KEY) === "1") {
-                open();
+                open(); // open() сам підніме WS
             }
 
             // Акуратне закриття при виході зі сторінки
