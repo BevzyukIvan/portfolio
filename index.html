@@ -624,27 +624,38 @@
       }
 
       /* ✅ Mobile: fullscreen + краще поводження з клавіатурою */
-      @media (max-width: 520px){
+    @media (max-width: 520px){
           .ltgchat-panel{
+            /* замість width:100vw */
             left: 0 !important;
             right: 0 !important;
 
-            /* головне: керуємо top/height через visualViewport */
+            /* top/height керуються visualViewport (ти вже робиш через CSS vars) */
             top: var(--ltg-vvo, 0px) !important;
             bottom: auto !important;
             height: var(--ltg-vvh, 100dvh) !important;
 
-            width: 100vw !important;
+            width: 100% !important;
+            max-width: 100% !important;
             border-radius: 0 !important;
+
+            box-sizing: border-box !important;
           }
 
-          /* fallback якщо dVh не підтримується */
-          @supports not (height: 100dvh){
-            .ltgchat-panel{ height: 100vh !important; }
+          /* щоб кнопки не “вилітали” за safe-area */
+          .ltgchat-head,
+          .ltgchat-foot{
+            padding-left: calc(12px + env(safe-area-inset-left)) !important;
+            padding-right: calc(12px + env(safe-area-inset-right)) !important;
           }
 
-          .ltgchat-btn{
-            bottom: 12px;
+          .ltgchat-foot{
+            padding-bottom: calc(10px + env(safe-area-inset-bottom)) !important;
+          }
+
+          /* КЛЮЧОВЕ: прибрати iOS zoom на input */
+          .ltgchat-input{
+            font-size: 16px !important;
           }
         }
       `;
