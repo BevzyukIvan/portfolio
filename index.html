@@ -392,7 +392,7 @@
         window.__LTGCHAT_WIDGET_INIT__ = true;
 
         const CFG = {
-            API_BASE: "https://franco-polycarpellary-electrostatically.ngrok-free.dev",
+            API_BASE: "https://live-chat-production-efeb.up.railway.app",
             TITLE: "Чат",
             BUTTON_LABEL: "Чат",
             POSITION: "right", // "left" | "right"
@@ -438,11 +438,6 @@
             localStorage.setItem(NAME_KEY, normalized);
             return true;
         }
-
-        // Опційно (на майбутнє): якщо захочеш дати можливість змінити ім'я
-        // function clearClientName() {
-        //     localStorage.removeItem(NAME_KEY);
-        // }
 
         function toWsBase(apiBase) {
             try {
@@ -490,6 +485,7 @@
         font:600 14px/1 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
         cursor:pointer;
         box-shadow:0 12px 30px rgba(0,0,0,.14);
+        -webkit-tap-highlight-color: transparent;
       }
       .ltgchat-btn:hover{ box-shadow:0 14px 34px rgba(0,0,0,.17); }
       .ltgchat-dot{
@@ -510,6 +506,8 @@
         color:#111827;
         box-shadow:0 18px 50px rgba(0,0,0,.18);
         font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+        will-change: transform;
+        padding-bottom: env(safe-area-inset-bottom);
       }
       .ltgchat-panel.is-open{ display:flex; }
 
@@ -538,6 +536,7 @@
         height:34px;
         cursor:pointer;
         font-weight:700;
+        -webkit-tap-highlight-color: transparent;
       }
 
       .ltgchat-body{
@@ -548,6 +547,7 @@
         flex-direction:column;
         gap:8px;
         background:#fff;
+        -webkit-overflow-scrolling: touch;
       }
 
       .ltgchat-msg{
@@ -616,12 +616,31 @@
         cursor:pointer;
         font-weight:700;
         padding:0 12px;
+        -webkit-tap-highlight-color: transparent;
       }
       .ltgchat-send:disabled{
         opacity:.6;
         cursor:not-allowed;
       }
-    `;
+
+      /* ✅ Mobile: fullscreen + краще поводження з клавіатурою */
+      @media (max-width: 520px){
+        .ltgchat-panel{
+          left: 0 !important;
+          right: 0 !important;
+          bottom: 0 !important;
+          width: 100vw !important;
+          height: 100vh !important;
+          border-radius: 0 !important;
+        }
+        @supports (height: 100dvh){
+          .ltgchat-panel{ height: 100dvh !important; }
+        }
+        .ltgchat-btn{
+          bottom: 12px;
+        }
+      }
+      `;
             const style = document.createElement("style");
             style.setAttribute("data-ltgchat", "1");
             style.appendChild(document.createTextNode(css));
@@ -631,7 +650,7 @@
         function appendMsg(container, who, text) {
             if (typeof text !== "string") return;
             const normalized = text.replace(/\r\n/g, "\n").trim();
-            if (!normalized) return; // захист від пустих keepalive/порожніх рядків
+            if (!normalized) return;
 
             const cls =
                 who === "me" ? "me" :
@@ -650,7 +669,7 @@
         async function sendMessage(apiBase, cid, text, clientName) {
             const payload = {
                 cid,
-                clientName: clientName || null, // <-- важливо для назви теми на бекенді
+                clientName: clientName || null,
                 text,
                 pageUrl: location.href,
                 referrer: document.referrer || null,
@@ -707,7 +726,6 @@
                 if (manuallyStopped) return;
                 if (!wsBase) return;
 
-                // Якщо вже є активне або в процесі - не створюємо дубль
                 if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
                     return;
                 }
@@ -728,19 +746,11 @@
                     if (typeof e.data !== "string") return;
 
                     let data;
-                    try {
-                        data = JSON.parse(e.data);
-                    } catch {
-                        return;
-                    }
+                    try { data = JSON.parse(e.data); } catch { return; }
 
-                    // Ігноруємо keepalive
                     const type = typeof data?.type === "string" ? data.type.toUpperCase() : "";
-                    if (type === "KEEPALIVE" || type === "PING" || type === "HEARTBEAT") {
-                        return;
-                    }
+                    if (type === "KEEPALIVE" || type === "PING" || type === "HEARTBEAT") return;
 
-                    // Беремо тільки непорожній текст
                     if (typeof data?.text === "string" && data.text.trim() !== "") {
                         onAgentMessage(data.text);
                     }
@@ -750,10 +760,6 @@
                     onStatus("Офлайн");
                     ws = null;
                     scheduleReconnect();
-                });
-
-                ws.addEventListener("error", () => {
-                    // Зазвичай після error прийде close; не дублюємо логіку тут
                 });
             }
 
@@ -768,6 +774,41 @@
             }
 
             return { connect, stop };
+        }
+
+        // ✅ iOS/Android: підняти панель над клавіатурою через visualViewport
+        function bindKeyboardAvoid(panelEl, bodyEl, inputEl) {
+            const vv = window.visualViewport;
+            if (!vv) return;
+
+            function update() {
+                // приблизна висота клавіатури
+                const keyboard = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+
+                panelEl.style.transform = keyboard > 0 ? `translateY(-${keyboard}px)` : "";
+
+                // якщо користувач близько внизу — тримаємо внизу
+                if (bodyEl) {
+                    const distToBottom = bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight;
+                    if (distToBottom < 80) bodyEl.scrollTop = bodyEl.scrollHeight;
+                }
+            }
+
+            vv.addEventListener("resize", update);
+            vv.addEventListener("scroll", update);
+            window.addEventListener("orientationchange", () => setTimeout(update, 80));
+
+            // коли фокус на інпуті — прокрути, щоб він був видимий
+            if (inputEl) {
+                inputEl.addEventListener("focus", () => {
+                    setTimeout(() => {
+                        update();
+                        try { inputEl.scrollIntoView({ block: "nearest" }); } catch {}
+                    }, 50);
+                });
+            }
+
+            update();
         }
 
         function init() {
@@ -794,10 +835,7 @@
 
             const panel = el("div", { class: "ltgchat-panel", role: "dialog", "aria-label": "Чат" }, [
                 el("div", { class: "ltgchat-head" }, [
-                    el("div", null, [
-                        titleEl,
-                        statusEl
-                    ]),
+                    el("div", null, [titleEl, statusEl]),
                     closeBtn
                 ]),
                 body,
@@ -811,6 +849,8 @@
 
             document.body.appendChild(btn);
             document.body.appendChild(panel);
+
+            bindKeyboardAvoid(panel, body, input);
 
             let sending = false;
 
@@ -830,7 +870,10 @@
             function open() {
                 panel.classList.add("is-open");
                 localStorage.setItem(OPEN_KEY, "1");
-                input.focus();
+                setTimeout(() => {
+                    input.focus();
+                    body.scrollTop = body.scrollHeight;
+                }, 0);
             }
 
             function close() {
@@ -852,26 +895,23 @@
                 const text = raw.trim();
                 if (!text) return;
 
-                // КРОК 1: якщо ім'я ще не задане — перший ввід = ім'я
+                // ім'я
                 if (!getClientName()) {
                     const name = normalizeClientName(text);
-
                     if (!name) {
-                        appendMsg(body, "sys", "Введіть, будь ласка, ім’я 2–40 символів. Це перше повідомлення збережеться як назва чату.");
+                        appendMsg(body, "sys", "Введіть, будь ласка, ім’я 2–40 символів.");
                         return;
                     }
 
                     setClientName(name);
-
                     input.value = "";
                     appendMsg(body, "sys", `Дякуємо, ${name}! Тепер напишіть, будь ласка, ваше питання.`);
-
                     refreshNameStageUi();
                     input.focus();
                     return;
                 }
 
-                // КРОК 2: звичайне повідомлення
+                // звичайне повідомлення
                 const clientName = getClientName();
 
                 input.value = "";
@@ -908,15 +948,11 @@
                 onStatus: (s) => setStatus(statusEl, s)
             });
 
-            // Підготуємо UI перед відкриттям
             refreshNameStageUi();
 
-            // Стартове повідомлення (лише в межах поточного завантаження сторінки)
             if (!getClientName()) {
-                appendMsg(
-                    body,
-                    "sys",
-                    "Доброго дня! Щоб почати, напишіть, будь ласка, як до вас звертатись. Перше повідомлення буде збережене як ваше ім’я (назва цього чату)."
+                appendMsg(body, "sys",
+                    "Доброго дня! Щоб почати, напишіть, будь ласка, як до вас звертатись."
                 );
             } else {
                 appendMsg(body, "sys", "Напишіть, будь ласка, ваше питання.");
@@ -924,12 +960,10 @@
 
             wsManager.connect();
 
-            // Відновити стан відкритого віджета (опційно)
             if (localStorage.getItem(OPEN_KEY) === "1") {
                 open();
             }
 
-            // Акуратне закриття при виході зі сторінки
             window.addEventListener("pagehide", () => wsManager.stop(), { once: true });
         }
 
