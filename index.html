@@ -625,21 +625,28 @@
 
       /* ✅ Mobile: fullscreen + краще поводження з клавіатурою */
       @media (max-width: 520px){
-        .ltgchat-panel{
-          left: 0 !important;
-          right: 0 !important;
-          bottom: 0 !important;
-          width: 100vw !important;
-          height: 100vh !important;
-          border-radius: 0 !important;
+          .ltgchat-panel{
+            left: 0 !important;
+            right: 0 !important;
+
+            /* головне: керуємо top/height через visualViewport */
+            top: var(--ltg-vvo, 0px) !important;
+            bottom: auto !important;
+            height: var(--ltg-vvh, 100dvh) !important;
+
+            width: 100vw !important;
+            border-radius: 0 !important;
+          }
+
+          /* fallback якщо dVh не підтримується */
+          @supports not (height: 100dvh){
+            .ltgchat-panel{ height: 100vh !important; }
+          }
+
+          .ltgchat-btn{
+            bottom: 12px;
+          }
         }
-        @supports (height: 100dvh){
-          .ltgchat-panel{ height: 100dvh !important; }
-        }
-        .ltgchat-btn{
-          bottom: 12px;
-        }
-      }
       `;
             const style = document.createElement("style");
             style.setAttribute("data-ltgchat", "1");
@@ -777,37 +784,20 @@
         }
 
         // ✅ iOS/Android: підняти панель над клавіатурою через visualViewport
-        function bindKeyboardAvoid(panelEl, bodyEl, inputEl) {
+        function bindMobileViewport(panelEl) {
             const vv = window.visualViewport;
             if (!vv) return;
 
-            function update() {
-                // приблизна висота клавіатури
-                const keyboard = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-
-                panelEl.style.transform = keyboard > 0 ? `translateY(-${keyboard}px)` : "";
-
-                // якщо користувач близько внизу — тримаємо внизу
-                if (bodyEl) {
-                    const distToBottom = bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight;
-                    if (distToBottom < 80) bodyEl.scrollTop = bodyEl.scrollHeight;
-                }
-            }
+            const update = () => {
+                // висота видимого viewport (без клавіатури)
+                panelEl.style.setProperty("--ltg-vvh", `${vv.height}px`);
+                // зміщення зверху (на iOS інколи не 0)
+                panelEl.style.setProperty("--ltg-vvo", `${vv.offsetTop}px`);
+            };
 
             vv.addEventListener("resize", update);
             vv.addEventListener("scroll", update);
             window.addEventListener("orientationchange", () => setTimeout(update, 80));
-
-            // коли фокус на інпуті — прокрути, щоб він був видимий
-            if (inputEl) {
-                inputEl.addEventListener("focus", () => {
-                    setTimeout(() => {
-                        update();
-                        try { inputEl.scrollIntoView({ block: "nearest" }); } catch {}
-                    }, 50);
-                });
-            }
-
             update();
         }
 
@@ -850,7 +840,7 @@
             document.body.appendChild(btn);
             document.body.appendChild(panel);
 
-            bindKeyboardAvoid(panel, body, input);
+            bindMobileViewport(panel);
 
             let sending = false;
 
@@ -867,9 +857,24 @@
                 input.placeholder = "Ваше повідомлення...";
             }
 
+            let __ltg_prev_scroll_y = 0;
+
             function open() {
+                __ltg_prev_scroll_y = window.scrollY || 0;
+
+                document.documentElement.style.overflow = "hidden";
+                document.body.style.overflow = "hidden";
+
+                // iOS: щоб сторінка реально не скролилась під overlay
+                document.body.style.position = "fixed";
+                document.body.style.top = `-${__ltg_prev_scroll_y}px`;
+                document.body.style.left = "0";
+                document.body.style.right = "0";
+                document.body.style.width = "100%";
+
                 panel.classList.add("is-open");
                 localStorage.setItem(OPEN_KEY, "1");
+
                 setTimeout(() => {
                     input.focus();
                     body.scrollTop = body.scrollHeight;
@@ -879,6 +884,18 @@
             function close() {
                 panel.classList.remove("is-open");
                 localStorage.removeItem(OPEN_KEY);
+
+                document.documentElement.style.overflow = "";
+                document.body.style.overflow = "";
+
+                // iOS: повертаємо сторінку назад
+                const y = __ltg_prev_scroll_y;
+                document.body.style.position = "";
+                document.body.style.top = "";
+                document.body.style.left = "";
+                document.body.style.right = "";
+                document.body.style.width = "";
+                window.scrollTo(0, y);
             }
 
             function toggle() {
