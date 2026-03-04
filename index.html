@@ -553,7 +553,6 @@
   background:#fff;
 }
 .ltgchat-title{ font-weight:700; font-size:14px; line-height:1.2; }
-.ltgchat-status{ font-size:12px; color:#6b7280; margin-top:2px; }
 .ltgchat-close{
   border:1px solid rgba(0,0,0,.08);
   background:#fff;
@@ -628,8 +627,6 @@
   color:#111827;
   padding:0 12px;
   outline:none;
-
-  /* 16px щоб iOS не робив zoom */
   font-size:16px !important;
 }
 .ltgchat-input::placeholder{ color:#9ca3af; }
@@ -657,11 +654,9 @@
   .ltgchat-panel{
     left:0 !important;
     right:0 !important;
-
     top: var(--ltg-vvo, 0px) !important;
     bottom:auto !important;
     height: var(--ltg-vvh, 100dvh) !important;
-
     width:100% !important;
     max-width:100% !important;
     border-radius:0 !important;
@@ -702,11 +697,6 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        function setStatus(statusEl, text) {
-            if (!statusEl) return;
-            statusEl.textContent = text || "";
-        }
-
         async function sendMessage(apiBase, cid, text, clientName) {
             const payload = {
                 cid,
@@ -740,8 +730,8 @@
             }
         }
 
-        // ✅ ОНОВЛЕНО: WS піднімається при заході на сайт і живе до закриття сторінки
-        function createWsManager({ wsBase, cid, onAgentMessage, onStatus, onOnline }) {
+        // WS піднімається при заході на сайт і живе до закриття сторінки
+        function createWsManager({ wsBase, cid, onAgentMessage, onOnline }) {
             let ws = null;
             let reconnectTimer = null;
             let reconnectDelay = CFG.WS_RECONNECT_MIN_MS;
@@ -757,7 +747,6 @@
             function scheduleReconnect() {
                 if (permanentlyStopped) return;
                 clearReconnectTimer();
-                onStatus("Підключення...");
                 if (typeof onOnline === "function") onOnline(false);
 
                 reconnectTimer = setTimeout(() => connectInternal(), reconnectDelay);
@@ -779,7 +768,6 @@
 
                 ws.addEventListener("open", () => {
                     reconnectDelay = CFG.WS_RECONNECT_MIN_MS;
-                    onStatus("Онлайн");
                     if (typeof onOnline === "function") onOnline(true);
                 });
 
@@ -791,13 +779,11 @@
 
                     const type = typeof data?.type === "string" ? data.type.toUpperCase() : "";
 
-                    // ВАЖЛИВО: heartbeat/keepalive НЕ є реальним повідомленням
+                    // heartbeat/keepalive ігноруємо
                     if (type === "KEEPALIVE" || type === "PING" || type === "HEARTBEAT") return;
 
-                    // (опційно) якщо колись додаси на бекенді тип з лічильником
+                    // (опційно) якщо бекенд колись шле лічильник непрочитаних
                     if ((type === "UNREAD" || type === "UNREAD_COUNT") && typeof data?.count === "number") {
-                        // цим ти можеш керувати “бекендним” лічильником
-                        // (зараз бекенд не шле такі повідомлення, але фронт готовий)
                         window.__LTGCHAT_SET_UNREAD__ && window.__LTGCHAT_SET_UNREAD__(data.count);
                         return;
                     }
@@ -809,19 +795,13 @@
 
                 ws.addEventListener("close", () => {
                     ws = null;
-                    onStatus("Офлайн");
                     if (typeof onOnline === "function") onOnline(false);
                     if (!permanentlyStopped) scheduleReconnect();
-                });
-
-                ws.addEventListener("error", () => {
-                    // зазвичай після error прийде close
                 });
             }
 
             function start() {
                 if (permanentlyStopped) return;
-                onStatus("Підключення...");
                 connectInternal();
             }
 
@@ -832,14 +812,12 @@
                     try { ws.close(); } catch {}
                 }
                 ws = null;
-                onStatus("Офлайн");
                 if (typeof onOnline === "function") onOnline(false);
             }
 
             return { start, stop };
         }
 
-        // iOS/Android: visualViewport
         function bindMobileViewport(panelEl) {
             const vv = window.visualViewport;
             if (!vv) return;
@@ -944,13 +922,13 @@
             });
 
             const sendBtn = el("button", { class: "ltgchat-send", type: "button", "aria-label": "Надіслати" }, ["→"]);
-            const statusEl = el("div", { class: "ltgchat-status" }, ["Офлайн"]);
             const closeBtn = el("button", { class: "ltgchat-close", type: "button", "aria-label": "Закрити чат" }, ["✕"]);
             const titleEl = el("div", { class: "ltgchat-title" }, [CFG.TITLE]);
 
+            // ✅ без statusEl взагалі (під заголовком нічого не буде)
             const panel = el("div", { class: "ltgchat-panel", role: "dialog", "aria-label": "Чат" }, [
                 el("div", { class: "ltgchat-head" }, [
-                    el("div", null, [titleEl, statusEl]),
+                    el("div", null, [titleEl]),
                     closeBtn
                 ]),
                 body,
@@ -991,7 +969,6 @@
                 }
             }
 
-            // даємо WS-менеджеру можливість (опційно) керувати unread від бекенду
             window.__LTGCHAT_SET_UNREAD__ = (n) => {
                 setUnread(n);
                 updateBadgeUi();
@@ -1018,16 +995,13 @@
                 wsBase,
                 cid,
                 onAgentMessage: (text) => {
-                    // завжди додаємо повідомлення в чат-історію (навіть якщо панель закрита)
                     appendMsg(body, "agent", text);
 
-                    // якщо панель закрита — це “непрочитане”
                     if (!panel.classList.contains("is-open")) {
-                        const n = setUnread(getUnread() + 1);
+                        setUnread(getUnread() + 1);
                         updateBadgeUi();
                     }
                 },
-                onStatus: (s) => setStatus(statusEl, s),
                 onOnline: (isOnline) => setOnlineUi(isOnline)
             });
 
@@ -1036,11 +1010,9 @@
                 panel.classList.add("is-open");
                 localStorage.setItem(OPEN_KEY, "1");
 
-                // відкрив — вважаємо, що переглянув
                 setUnread(0);
                 updateBadgeUi();
 
-                // прокрутка вниз, щоб одразу бачити останнє
                 body.scrollTop = body.scrollHeight;
             }
 
@@ -1064,7 +1036,6 @@
                 const text = raw.trim();
                 if (!text) return;
 
-                // КРОК 1: якщо ім'я ще не задане — перший ввід = ім'я
                 if (!getClientName()) {
                     const name = normalizeClientName(text);
 
@@ -1081,7 +1052,6 @@
                     return;
                 }
 
-                // КРОК 2: звичайне повідомлення
                 const clientName = getClientName();
 
                 input.value = "";
@@ -1119,17 +1089,15 @@
                 appendMsg(body, "sys", "Напишіть, будь ласка, ваше питання.");
             }
 
-            // Відновлюємо бейдж, якщо був (наприклад, при перезавантаженні сторінки)
             updateBadgeUi();
 
-            // ✅ WS стартує ОДРАЗУ при завантаженні сторінки
+            // WS стартує при завантаженні сторінки
             wsManager.start();
 
             if (localStorage.getItem(OPEN_KEY) === "1") {
                 open();
             }
 
-            // Акуратне закриття WS при виході зі сторінки
             window.addEventListener("pagehide", () => wsManager.stop(), { once: true });
         }
 
