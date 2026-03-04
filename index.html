@@ -404,6 +404,7 @@
         const WIDGET_KEY = "ltgchat_cid";
         const OPEN_KEY = "ltgchat_open";
         const NAME_KEY = "ltgchat_name";
+        const UNREAD_KEY = "ltgchat_unread";
 
         function getCid() {
             let cid = localStorage.getItem(WIDGET_KEY);
@@ -437,6 +438,17 @@
             if (!normalized) return false;
             localStorage.setItem(NAME_KEY, normalized);
             return true;
+        }
+
+        function getUnread() {
+            const n = parseInt(localStorage.getItem(UNREAD_KEY) || "0", 10);
+            return Number.isFinite(n) && n > 0 ? n : 0;
+        }
+
+        function setUnread(n) {
+            const safe = Math.max(0, Number.isFinite(n) ? Math.floor(n) : 0);
+            localStorage.setItem(UNREAD_KEY, String(safe));
+            return safe;
         }
 
         function toWsBase(apiBase) {
@@ -475,8 +487,8 @@
             const css = `
 /* ---------- BUTTON ---------- */
 .ltgchat-btn{
-  position:fixed; bottom:18px; ${side}:18px;
-  z-index:2147483647;
+  position:fixed; bottom:80px; ${side}:18px;
+  z-index:9999;
   display:inline-flex; align-items:center; gap:8px;
   padding:12px 14px;
   border-radius:999px;
@@ -488,9 +500,29 @@
   box-shadow:0 12px 30px rgba(0,0,0,.14);
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+  position:fixed;
 }
 .ltgchat-btn:hover{ box-shadow:0 14px 34px rgba(0,0,0,.17); }
 .ltgchat-dot{ width:8px; height:8px; border-radius:999px; background:#22c55e; }
+.ltgchat-dot.off{ background:#9ca3af; }
+
+.ltgchat-badge{
+  position:absolute;
+  top:-6px;
+  right:-6px;
+  min-width:18px;
+  height:18px;
+  padding:0 6px;
+  border-radius:999px;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  font:700 12px/1 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  background:#ef4444;
+  color:#fff;
+  border:2px solid #fff;
+  box-sizing:border-box;
+}
 
 /* ---------- PANEL ---------- */
 .ltgchat-panel{
@@ -597,7 +629,7 @@
   padding:0 12px;
   outline:none;
 
-  /* КЛЮЧОВЕ: 16px, щоб iOS НЕ робив zoom */
+  /* 16px щоб iOS не робив zoom */
   font-size:16px !important;
 }
 .ltgchat-input::placeholder{ color:#9ca3af; }
@@ -620,13 +652,12 @@
 }
 .ltgchat-send:disabled{ opacity:.6; cursor:not-allowed; }
 
-/* ---------- MOBILE (iOS/Android) ---------- */
+/* ---------- MOBILE ---------- */
 @media (max-width: 520px){
   .ltgchat-panel{
     left:0 !important;
     right:0 !important;
 
-    /* керування через visualViewport */
     top: var(--ltg-vvo, 0px) !important;
     bottom:auto !important;
     height: var(--ltg-vvh, 100dvh) !important;
@@ -636,24 +667,21 @@
     border-radius:0 !important;
   }
 
-  /* safe-area по боках щоб не підрізало ✕ та → */
   .ltgchat-head,
   .ltgchat-foot{
     padding-left: calc(12px + env(safe-area-inset-left)) !important;
     padding-right: calc(12px + env(safe-area-inset-right)) !important;
   }
 
-  /* safe-area внизу додаємо ТІЛЬКИ коли клавіатура не відкрита */
   .ltgchat-panel:not(.ltgchat-kb) .ltgchat-foot{
     padding-bottom: calc(10px + env(safe-area-inset-bottom)) !important;
   }
 
-  /* коли клавіатура відкрита — прибираємо нижній відступ (щоб не створювати зайвий “проліт”) */
   .ltgchat-panel.ltgchat-kb .ltgchat-foot{
     padding-bottom: 0 !important;
   }
 
-  .ltgchat-btn{ bottom:12px; }
+  .ltgchat-btn{ bottom:65px; right: auto; left: 18px; }
 }
     `;
 
@@ -712,16 +740,11 @@
             }
         }
 
-        // ✅ ОНОВЛЕНО: WS піднімається тільки коли чат "відкритий"
-        function createWsManager({ wsBase, cid, onAgentMessage, onStatus }) {
+        // ✅ ОНОВЛЕНО: WS піднімається при заході на сайт і живе до закриття сторінки
+        function createWsManager({ wsBase, cid, onAgentMessage, onStatus, onOnline }) {
             let ws = null;
             let reconnectTimer = null;
             let reconnectDelay = CFG.WS_RECONNECT_MIN_MS;
-
-            // enabled=true тільки коли чат відкритий
-            let enabled = false;
-
-            // stop() для pagehide (повністю зупиняє)
             let permanentlyStopped = false;
 
             function clearReconnectTimer() {
@@ -732,15 +755,17 @@
             }
 
             function scheduleReconnect() {
-                if (permanentlyStopped || !enabled) return;
+                if (permanentlyStopped) return;
                 clearReconnectTimer();
                 onStatus("Підключення...");
+                if (typeof onOnline === "function") onOnline(false);
+
                 reconnectTimer = setTimeout(() => connectInternal(), reconnectDelay);
                 reconnectDelay = Math.min(reconnectDelay * 2, CFG.WS_RECONNECT_MAX_MS);
             }
 
             function connectInternal() {
-                if (permanentlyStopped || !enabled) return;
+                if (permanentlyStopped) return;
                 if (!wsBase) return;
 
                 if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
@@ -755,6 +780,7 @@
                 ws.addEventListener("open", () => {
                     reconnectDelay = CFG.WS_RECONNECT_MIN_MS;
                     onStatus("Онлайн");
+                    if (typeof onOnline === "function") onOnline(true);
                 });
 
                 ws.addEventListener("message", (e) => {
@@ -764,21 +790,28 @@
                     try { data = JSON.parse(e.data); } catch { return; }
 
                     const type = typeof data?.type === "string" ? data.type.toUpperCase() : "";
+
+                    // ВАЖЛИВО: heartbeat/keepalive НЕ є реальним повідомленням
                     if (type === "KEEPALIVE" || type === "PING" || type === "HEARTBEAT") return;
 
-                    if (typeof data?.text === "string" && data.text.trim() !== "") {
+                    // (опційно) якщо колись додаси на бекенді тип з лічильником
+                    if ((type === "UNREAD" || type === "UNREAD_COUNT") && typeof data?.count === "number") {
+                        // цим ти можеш керувати “бекендним” лічильником
+                        // (зараз бекенд не шле такі повідомлення, але фронт готовий)
+                        window.__LTGCHAT_SET_UNREAD__ && window.__LTGCHAT_SET_UNREAD__(data.count);
+                        return;
+                    }
+
+                    if (type === "MSG" && typeof data?.text === "string" && data.text.trim() !== "") {
                         onAgentMessage(data.text);
                     }
                 });
 
                 ws.addEventListener("close", () => {
                     ws = null;
-                    if (!permanentlyStopped && enabled) {
-                        onStatus("Офлайн");
-                        scheduleReconnect();
-                    } else {
-                        onStatus("Офлайн");
-                    }
+                    onStatus("Офлайн");
+                    if (typeof onOnline === "function") onOnline(false);
+                    if (!permanentlyStopped) scheduleReconnect();
                 });
 
                 ws.addEventListener("error", () => {
@@ -786,35 +819,27 @@
                 });
             }
 
-            // викликається при відкритті чату
-            function connect() {
+            function start() {
                 if (permanentlyStopped) return;
-                enabled = true;
                 onStatus("Підключення...");
                 connectInternal();
             }
 
-            // викликається при закритті чату (можна потім знову connect)
-            function disconnect() {
-                enabled = false;
+            function stop() {
+                permanentlyStopped = true;
                 clearReconnectTimer();
                 if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
                     try { ws.close(); } catch {}
                 }
                 ws = null;
                 onStatus("Офлайн");
+                if (typeof onOnline === "function") onOnline(false);
             }
 
-            // викликається при виході зі сторінки (pagehide) — без відновлення
-            function stop() {
-                permanentlyStopped = true;
-                disconnect();
-            }
-
-            return { connect, disconnect, stop };
+            return { start, stop };
         }
 
-        // iOS/Android: використовуємо visualViewport для висоти/offset, і ставимо клас "клавіатура відкрита"
+        // iOS/Android: visualViewport
         function bindMobileViewport(panelEl) {
             const vv = window.visualViewport;
             if (!vv) return;
@@ -833,7 +858,6 @@
             update();
         }
 
-        // Хак: під час фокуса в інпуті блокуємо авто-zoom через meta viewport (iOS)
         function lockViewportZoomWhileFocused(inputEl) {
             let meta = document.querySelector('meta[name="viewport"]');
             if (!meta) {
@@ -860,29 +884,45 @@
             inputEl.addEventListener("blur", onBlur);
         }
 
-        // iOS: надійний lock scroll під overlay
-        let __ltg_prev_scroll_y = 0;
+        function isMobile() {
+            return window.matchMedia("(max-width: 520px)").matches;
+        }
+
+        let __ltg_scroll_locked = false;
+
         function lockScroll() {
-            __ltg_prev_scroll_y = window.scrollY || 0;
-            document.documentElement.style.overflow = "hidden";
-            document.body.style.overflow = "hidden";
+            if (!isMobile()) return;
+
+            const scrollY = window.scrollY || document.documentElement.scrollTop;
+            document.body.dataset.scrollY = scrollY;
+
             document.body.style.position = "fixed";
-            document.body.style.top = `-${__ltg_prev_scroll_y}px`;
+            document.body.style.top = `-${scrollY}px`;
             document.body.style.left = "0";
             document.body.style.right = "0";
             document.body.style.width = "100%";
+
+            document.documentElement.style.overflow = "hidden";
+
+            __ltg_scroll_locked = true;
         }
 
         function unlockScroll() {
-            document.documentElement.style.overflow = "";
-            document.body.style.overflow = "";
-            const y = __ltg_prev_scroll_y || 0;
+            if (!__ltg_scroll_locked) return;
+
+            const scrollY = document.body.dataset.scrollY || "0";
+
             document.body.style.position = "";
             document.body.style.top = "";
             document.body.style.left = "";
             document.body.style.right = "";
             document.body.style.width = "";
-            window.scrollTo(0, y);
+
+            document.documentElement.style.overflow = "";
+
+            window.scrollTo(0, parseInt(scrollY, 10));
+
+            __ltg_scroll_locked = false;
         }
 
         function init() {
@@ -917,25 +957,49 @@
                 el("div", { class: "ltgchat-foot" }, [input, sendBtn])
             ]);
 
+            const dot = el("span", { class: "ltgchat-dot off", "aria-hidden": "true" });
+            const badge = el("span", { class: "ltgchat-badge", "aria-hidden": "true" }, ["0"]);
+
             const btn = el("button", { class: "ltgchat-btn", type: "button", "aria-label": "Відкрити чат" }, [
-                el("span", { class: "ltgchat-dot", "aria-hidden": "true" }),
-                CFG.BUTTON_LABEL
+                dot,
+                CFG.BUTTON_LABEL,
+                badge
             ]);
 
             document.body.appendChild(btn);
             document.body.appendChild(panel);
 
-            // важливо: після вставки в DOM
             bindMobileViewport(panel);
 
-            // фокус/блюр як додатковий “якорь” для ltgchat-kb (щоб не було зайвого паддінгу)
             input.addEventListener("focus", () => panel.classList.add("ltgchat-kb"));
             input.addEventListener("blur", () => setTimeout(() => panel.classList.remove("ltgchat-kb"), 50));
 
-            // анти-zoom для iOS (Chrome/Google/вебв’ю)
             lockViewportZoomWhileFocused(input);
 
             let sending = false;
+
+            function updateBadgeUi() {
+                const n = getUnread();
+                if (n > 0) {
+                    badge.textContent = n > 99 ? "99+" : String(n);
+                    badge.style.display = "inline-flex";
+                    btn.setAttribute("aria-label", `Відкрити чат. Непрочитаних: ${n}`);
+                } else {
+                    badge.textContent = "0";
+                    badge.style.display = "none";
+                    btn.setAttribute("aria-label", "Відкрити чат");
+                }
+            }
+
+            // даємо WS-менеджеру можливість (опційно) керувати unread від бекенду
+            window.__LTGCHAT_SET_UNREAD__ = (n) => {
+                setUnread(n);
+                updateBadgeUi();
+            };
+
+            function setOnlineUi(isOnline) {
+                dot.classList.toggle("off", !isOnline);
+            }
 
             function refreshNameStageUi() {
                 const clientName = getClientName();
@@ -953,8 +1017,18 @@
             const wsManager = createWsManager({
                 wsBase,
                 cid,
-                onAgentMessage: (text) => appendMsg(body, "agent", text),
-                onStatus: (s) => setStatus(statusEl, s)
+                onAgentMessage: (text) => {
+                    // завжди додаємо повідомлення в чат-історію (навіть якщо панель закрита)
+                    appendMsg(body, "agent", text);
+
+                    // якщо панель закрита — це “непрочитане”
+                    if (!panel.classList.contains("is-open")) {
+                        const n = setUnread(getUnread() + 1);
+                        updateBadgeUi();
+                    }
+                },
+                onStatus: (s) => setStatus(statusEl, s),
+                onOnline: (isOnline) => setOnlineUi(isOnline)
             });
 
             function open() {
@@ -962,22 +1036,17 @@
                 panel.classList.add("is-open");
                 localStorage.setItem(OPEN_KEY, "1");
 
-                // ✅ WS підключаємо ТІЛЬКИ при відкритті чату
-                wsManager.connect();
+                // відкрив — вважаємо, що переглянув
+                setUnread(0);
+                updateBadgeUi();
 
-                setTimeout(() => {
-                    input.focus({ preventScroll: true });
-                    body.scrollTop = body.scrollHeight;
-                }, 0);
+                // прокрутка вниз, щоб одразу бачити останнє
+                body.scrollTop = body.scrollHeight;
             }
 
             function close() {
                 panel.classList.remove("is-open");
-                localStorage.removeItem(OPEN_KEY);
-
-                // ✅ WS відключаємо при закритті чату (можна потім знову підключити)
-                wsManager.disconnect();
-
+                localStorage.setItem(OPEN_KEY, "0");
                 unlockScroll();
             }
 
@@ -1050,11 +1119,17 @@
                 appendMsg(body, "sys", "Напишіть, будь ласка, ваше питання.");
             }
 
+            // Відновлюємо бейдж, якщо був (наприклад, при перезавантаженні сторінки)
+            updateBadgeUi();
+
+            // ✅ WS стартує ОДРАЗУ при завантаженні сторінки
+            wsManager.start();
+
             if (localStorage.getItem(OPEN_KEY) === "1") {
-                open(); // open() сам підніме WS
+                open();
             }
 
-            // Акуратне закриття при виході зі сторінки
+            // Акуратне закриття WS при виході зі сторінки
             window.addEventListener("pagehide", () => wsManager.stop(), { once: true });
         }
 
